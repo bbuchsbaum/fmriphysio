@@ -1,0 +1,31 @@
+Package: phynd
+Type: Package
+Title: Fast Design-Free Physiological Denoising
+Version: 0.0.0.9000
+Authors@R: person("Ben", "Buchsbaum", email = "ben@example.org", role = c("aut", "cre"))
+Description: Fast, design-free physiological denoising inspired by PHYCAA+ using
+    low-rank dynamic component extraction with optional DiCCA/DiPCA integration.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Depends: 
+    R (>= 4.1.0)
+Imports:
+    methods,
+    stats,
+    utils,
+    Rcpp,
+    rsvd
+LinkingTo:
+    Rcpp,
+    RcppArmadillo
+Suggests:
+    testthat (>= 3.0.0),
+    dipca,
+    neuroim2,
+    jsonlite,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+Config/testthat/edition: 3

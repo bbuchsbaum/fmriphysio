@@ -1,0 +1,18 @@
+<urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
+<url><loc>/404.html</loc></url>
+<url><loc>/LICENSE-text.html</loc></url>
+<url><loc>/PHYCAA_fast_design_notes.html</loc></url>
+<url><loc>/articles/index.html</loc></url>
+<url><loc>/articles/phynd.html</loc></url>
+<url><loc>/authors.html</loc></url>
+<url><loc>/index.html</loc></url>
+<url><loc>/reference/benchmark_fast_phy_denoise.html</loc></url>
+<url><loc>/reference/compcor_denoise.html</loc></url>
+<url><loc>/reference/compute_design_free_qc.html</loc></url>
+<url><loc>/reference/compute_wNN_diff_energy.html</loc></url>
+<url><loc>/reference/extract_caa_oneshot.html</loc></url>
+<url><loc>/reference/fast_phy_denoise.html</loc></url>
+<url><loc>/reference/index.html</loc></url>
+<url><loc>/reference/write_qc_artifact.html</loc></url>
+</urlset>
+

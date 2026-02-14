@@ -1,0 +1,223 @@
+{
+  "project": "phynd_fast_phy_denoise",
+  "date": "2026-02-14",
+  "phases": [
+    {
+      "phase_id": "phase_0",
+      "title": "Baseline scaffolding",
+      "status": "implemented",
+      "items": [
+        {
+          "id": "P0.1",
+          "title": "Create package skeleton",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "Repository contains DESCRIPTION, NAMESPACE, and R/ directory.",
+            "At least one exported function is available from NAMESPACE.",
+            "Tests entrypoint exists at tests/testthat.R."
+          ]
+        },
+        {
+          "id": "P0.2",
+          "title": "Matrix orientation and projection utilities",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "Input matrix is converted to internal N x T orientation.",
+            "Output is restored to original orientation.",
+            "Projection helper removes nuisance subspace using QR."
+          ]
+        }
+      ]
+    },
+    {
+      "phase_id": "phase_1",
+      "title": "Fast wNN",
+      "status": "implemented",
+      "items": [
+        {
+          "id": "P1.1",
+          "title": "Differenced-energy voxel scoring",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "Function computes mean(diff(x)^2) per voxel in O(N*T).",
+            "Sorted-score linear baseline and delta are returned.",
+            "Function errors for fewer than 3 time points."
+          ]
+        },
+        {
+          "id": "P1.2",
+          "title": "wNN thresholding modes",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "Percentile mode supports nt_q and nn_q and produces piecewise-linear ramp.",
+            "Mixture mode produces soft posterior-based wNN in [0,1].",
+            "Returned output includes wNN, delta, and threshold diagnostics."
+          ]
+        }
+      ]
+    },
+    {
+      "phase_id": "phase_2",
+      "title": "Extractor engines",
+      "status": "implemented",
+      "items": [
+        {
+          "id": "P2.1",
+          "title": "Low-rank decomposition with randomized SVD option",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "truncated_svd supports svd_engine values auto, rsvd, svd.",
+            "When svd_engine='rsvd', rsvd::rsvd is used.",
+            "When svd_engine='auto', rsvd::rsvd is used for rank-truncated decompositions.",
+            "Function returns u, d, v and engine metadata."
+          ]
+        },
+        {
+          "id": "P2.2",
+          "title": "One-shot CAA extractor",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "extract_caa_oneshot takes K x T and returns T x L scores.",
+            "Lagged cross-covariance SVD is used to derive candidates.",
+            "Predictability vector is returned from singular values."
+          ]
+        },
+        {
+          "id": "P2.3",
+          "title": "Optional DiCCA/DiPCA wrappers",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "extract_dynamic_components supports extractor=dicca and extractor=dipca.",
+            "Code fails fast with a clear message when dipca is unavailable.",
+            "Scores and predictability are normalized to common output fields."
+          ]
+        }
+      ]
+    },
+    {
+      "phase_id": "phase_3",
+      "title": "Selection and regression",
+      "status": "implemented",
+      "items": [
+        {
+          "id": "P3.1",
+          "title": "Vectorized NN/NT ratio scoring",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "Per-component R2 maps are computed via matrix-vector products.",
+            "RatioNN_NT is computed as median(R2_NN)/median(R2_NT).",
+            "Code errors clearly if NN or NT voxel sets are empty."
+          ]
+        },
+        {
+          "id": "P3.2",
+          "title": "Design guardrail",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "When design is supplied, candidate components are orthogonalized to design.",
+            "Design row count must match time points.",
+            "Near-zero post-orthogonalization components are dropped."
+          ]
+        },
+        {
+          "id": "P3.3",
+          "title": "Split-half stability filter",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "Half-split extraction is recomputed on each split.",
+            "Components pass only if both halves show correlation above threshold.",
+            "Filter can be disabled with stability=none."
+          ]
+        },
+        {
+          "id": "P3.4",
+          "title": "One-shot nuisance projection",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "Selected nuisance matrix is projected out using QR.",
+            "No per-voxel regression loop is required.",
+            "Output shape matches original input orientation."
+          ]
+        },
+        {
+          "id": "P3.5",
+          "title": "Rcpp kernels for scoring and stability",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "score_components_nn_nt_cpp is implemented in src/rcpp_kernels.cpp using RcppArmadillo.",
+            "stability_filter_cpp is implemented in src/rcpp_kernels.cpp using RcppArmadillo.",
+            "R functions auto-dispatch to C++ kernels when package symbols are loaded and fallback to pure R otherwise."
+          ]
+        },
+        {
+          "id": "P3.6",
+          "title": "CompCor reduction pathway",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "compcor_denoise supports mode='acompcorr' with nuisance_mask or wNN-based ROI selection.",
+            "compcor_denoise supports mode='tcompcorr' using top temporal-variance voxel selection.",
+            "CompCor regressors are extracted via low-rank decomposition and projected out in one shot.",
+            "Optional pre-PCA DCT high-pass is available via pre_highpass='dct'."
+          ]
+        }
+      ]
+    },
+    {
+      "phase_id": "phase_4",
+      "title": "Performance and quality harness",
+      "status": "implemented",
+      "items": [
+        {
+          "id": "P4.1",
+          "title": "Smoke tests",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "At least three tests exist covering wNN, end-to-end run, and orientation handling.",
+            "Tests execute without requiring dipca or neuroim2.",
+            "Tests validate dimensional consistency and bounded weights."
+          ]
+        },
+        {
+          "id": "P4.2",
+          "title": "Benchmark harness",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "Synthetic benchmark script reports walltime per step.",
+            "Benchmark compares svd_engine=svd vs svd_engine=rsvd on large N,T.",
+            "Results are stored in a machine-readable artifact."
+          ]
+        },
+        {
+          "id": "P4.3",
+          "title": "Design-free QC report",
+          "status": "implemented",
+          "acceptance_criteria": [
+            "QC computes NT tSNR delta and NN variance reduction.",
+            "QC reports component counts and ratio distributions.",
+            "QC output is serializable for CI pipelines."
+          ]
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "required": [
+      "stats",
+      "utils",
+      "rsvd"
+    ],
+    "optional": [
+      "dipca",
+      "neuroim2",
+      "testthat",
+      "jsonlite",
+      "Rcpp",
+      "RcppArmadillo"
+    ],
+    "notes": [
+      "rsvd is a required randomized SVD backend.",
+      "dipca is optional and only needed for extractor=dicca or extractor=dipca.",
+      "neuroim2 integration is matrix-first in this revision and can be expanded with dedicated S4 methods."
+    ]
+  }
+}

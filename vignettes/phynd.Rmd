@@ -1,0 +1,242 @@
+---
+title: "Getting started with phynd"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started with phynd}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+library(phynd)
+```
+
+## Why phynd?
+
+Functional MRI signals are contaminated by physiological noise -- cardiac
+pulsation, respiration, and other non-neuronal sources that inflate variance
+and reduce sensitivity to true neural effects. Traditional approaches require
+external recordings (pulse oximeter, respiratory belt) or explicit nuisance
+models, which are not always available.
+
+**phynd** provides fast, *design-free* physiological denoising inspired by
+the PHYCAA+ framework (Churchill et al., 2012, 2013). It automatically
+separates neuronal from non-neuronal voxels, extracts dynamic noise
+components from the non-neuronal subspace, and projects them out -- all
+without external physiological recordings or a task design matrix.
+
+The core pipeline runs in seconds on typical fMRI datasets and is
+implemented with Rcpp/RcppArmadillo for the performance-critical inner loops.
+
+## Quick example
+
+Generate a toy dataset with known physiological and neuronal sources, denoise
+it in one call, and inspect the result:
+
+```{r quick-example}
+set.seed(42)
+
+# Simulate: 500 voxels, 200 time points, 20% non-neuronal
+X <- phynd:::simulate_phy_data(n_vox = 500, n_time = 200, nn_frac = 0.20)
+
+# Denoise
+result <- fast_phy_denoise(
+  X, tr = 2.0,
+  stability = "none",
+  max_passes = 1
+)
+
+# What came back?
+names(result)
+```
+```{r quick-dims}
+dim(result$x_clean)
+n_selected <- ncol(result$components_selected)
+n_selected
+```
+
+`x_clean` is the denoised data matrix in the same orientation as the input.
+`components_selected` holds the nuisance regressors that were identified and
+removed. On this simulated example you should typically see a nonzero
+selection count. If you see zero selected components on your own data, try
+`ratio_thresh = 0.9` or set `stability = "none"` during initial exploration.
+
+## How the pipeline works
+
+`fast_phy_denoise()` proceeds through four stages:
+
+1. **Build a non-neuronal weight map (wNN)** -- each voxel gets a weight
+   between 0 (likely neuronal) and 1 (likely non-neuronal), based on the
+   energy profile of its temporal differences.
+
+2. **Low-rank SVD** -- the wNN-weighted data is reduced to a compact
+   subspace via truncated SVD.
+
+3. **Dynamic component extraction** -- temporal components with high
+   lag-one predictability are extracted. By default this uses a fast
+   canonical autocorrelation (CAA) method; optionally DiCCA or DiPCA
+   can be used instead.
+
+4. **Score and project out** -- each candidate component is scored by how
+   much variance it explains in non-neuronal versus neuronal voxels.
+   Components with a high NN/NT ratio are identified as physiological
+   noise and regressed out.
+
+Let's walk through these stages.
+
+### Stage 1: The wNN map
+
+The wNN map is also available standalone via `compute_wNN_diff_energy()`:
+
+```{r wnn-map}
+wnn_result <- compute_wNN_diff_energy(X)
+hist(wnn_result$wNN, breaks = 30, main = "wNN distribution",
+     xlab = "wNN (0 = non-neuronal, 1 = neuronal)", col = "steelblue")
+```
+
+Voxels near 0 are flagged as non-neuronal (high temporal derivative energy);
+voxels near 1 are likely neuronal. The ramp between `delta_nt` and `delta_nn`
+provides a smooth transition.
+
+### Stage 2-3: Component extraction
+
+The `extractor` argument controls which method finds dynamic components:
+
+- **`"caa"`** (default) -- canonical autocorrelation, fast and
+  dependency-free.
+- **`"dicca"`** or **`"dipca"`** -- uses the `dipca` package for
+  more sophisticated dynamic component analysis. Requires installing
+  `dipca`.
+
+```{r component-table}
+result$component_table[, c("component", "ratio_nn_nt", "predictability", "selected")]
+```
+
+Components with `ratio_nn_nt` above the threshold (default 1.0) are
+selected as nuisance regressors.
+
+### Stage 4: Cleaned output
+
+You can verify the denoising effect with `compute_design_free_qc()`:
+
+```{r qc}
+qc <- compute_design_free_qc(
+  x_raw   = X,
+  x_clean = result$x_clean,
+  wNN     = result$wNN,
+  component_table = result$component_table
+)
+
+fmt_qc_num <- function(x) if (is.na(x)) "NA" else if (abs(x) < 1e-3) sprintf("%.3e", x) else sprintf("%.4f", x)
+
+cat(sprintf("tSNR in neuronal voxels:  %s -> %s\n",
+            fmt_qc_num(qc$tsnr_nt_before), fmt_qc_num(qc$tsnr_nt_after)))
+cat(sprintf("NT median tSNR delta:     %+0.3e\n", qc$tsnr_nt_delta))
+cat(sprintf("NN variance reduction:    %.0f%%\n",
+            qc$nn_variance_reduction_frac * 100))
+```
+
+Good denoising preserves (or improves) tSNR in neuronal voxels while
+reducing variance in non-neuronal voxels.
+
+## Tuning parameters
+
+The most important knobs:
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `pca_rank` | 100 | Dimension of the low-rank subspace. Larger values capture more variance but cost more compute. |
+| `ratio_thresh` | 1.0 | NN/NT ratio cutoff. Raise to be more conservative (fewer components removed). |
+| `extractor` | `"caa"` | Component extraction method. `"dicca"` and `"dipca"` may be more sensitive but require the `dipca` package. |
+| `stability` | `"none"` | Set to `"half"` to enable split-half stability filtering, which discards components that are not reproducible across data halves. |
+| `max_passes` | 1 | Number of iterative denoising passes. A second pass can catch residual noise. |
+| `svd_engine` | `"auto"` | Uses randomized SVD (`rsvd`) when rank-truncated decomposition is needed; falls back to base `svd` for full-rank decomposition. |
+
+```{r tuning-example}
+result_strict <- fast_phy_denoise(
+  X, tr = 2.0,
+  ratio_thresh = 1.5,
+  stability = "half",
+  stability_thresh = 0.3
+)
+
+cat(sprintf("Default: %d components removed\n",
+            ncol(result$components_selected)))
+cat(sprintf("Strict:  %d components removed\n",
+            ncol(result_strict$components_selected)))
+```
+
+## CompCor baseline
+
+phynd also provides `compcor_denoise()`, implementing both aCompCor and
+tCompCor as comparison baselines:
+
+```{r compcor}
+cc <- compcor_denoise(X, tr = 2.0, mode = "tcompcorr", n_comp = 5)
+
+qc_cc <- compute_design_free_qc(
+  x_raw   = X,
+  x_clean = cc$x_clean,
+  wNN     = result$wNN
+)
+
+cat(sprintf("tCompCor tSNR (NT): %.2f -> %.2f\n",
+            qc_cc$tsnr_nt_before, qc_cc$tsnr_nt_after))
+```
+
+**Compatibility note:** this is a CompCor-style baseline for internal
+comparison, not a drop-in reproduction of fMRIPrep confounds. Differences can
+include preprocessing before CompCor (for example high-pass/censoring),
+anatomical mask construction details, and component retention policy
+(fixed `n_comp` here).
+
+If you want a closer preprocessing analogue to common fMRIPrep-style usage,
+enable DCT pre-highpass with `pre_highpass = "dct"` and tune `highpass_hz`.
+
+This lets you compare phynd's adaptive approach against fixed-rank CompCor
+on the same data.
+
+## Diagnostics and timing
+
+When `return_diagnostics = TRUE` (the default), the result includes detailed
+timing information:
+
+```{r timing}
+result$diagnostics$timings$total_seconds
+```
+
+For systematic benchmarking across data sizes and SVD engines, see
+`benchmark_fast_phy_denoise()`.
+
+## Saving QC artifacts
+
+`write_qc_artifact()` exports QC summaries for downstream reporting:
+
+```{r write-qc, eval = FALSE}
+write_qc_artifact(qc, "qc_summary.json")
+write_qc_artifact(qc, "qc_summary.csv")
+write_qc_artifact(qc, "qc_summary.rds")
+```
+
+## Next steps
+
+- `?fast_phy_denoise` -- full parameter documentation
+- `?compcor_denoise` -- CompCor baseline details
+- `?compute_wNN_diff_energy` -- standalone wNN map construction
+- `?compute_design_free_qc` -- QC metric definitions
+
+## References
+
+Churchill, N. W., Yourganov, G., Spring, R., Rasmussen, P. M., Lee, W.,
+Ween, J. E., & Strother, S. C. (2012). PHYCAA: Data-driven measurement and
+removal of physiological noise in BOLD fMRI. *NeuroImage*, 59(2), 1299--1314.
+doi: [10.1016/j.neuroimage.2011.08.021](https://doi.org/10.1016/j.neuroimage.2011.08.021)
+
+Churchill, N. W., & Strother, S. C. (2013). PHYCAA+: An optimized, adaptive
+procedure for measuring and controlling physiological noise in BOLD fMRI.
+*NeuroImage*, 82, 306--325.
+doi: [10.1016/j.neuroimage.2013.05.102](https://doi.org/10.1016/j.neuroimage.2013.05.102)

@@ -1,0 +1,9 @@
+^doc$
+^Meta$
+^\.claude$
+^\.omc$
+^PHYCAA_fast_design_notes\.md$
+^acceptance_criteria\.json$
+^docs$
+^\.rcmdcheck_result\.rds$
+^.*\.Rcheck$
