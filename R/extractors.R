@@ -4,69 +4,178 @@ cpp_symbol_available <- function(symbol) {
   isTRUE(is.loaded(symbol))
 }
 
-truncated_svd <- function(X, rank, svd_engine = c("auto", "rsvd", "svd"), seed = NULL) {
+# Singular values below this fraction of the largest are treated as null
+# directions. The Gram-eigen SVD resolves null singular values only to about
+# sqrt(machine epsilon) times the largest (~1e-8), so the cut must sit above
+# that.
+null_sv_tol <- 1e-6
+
+# Truncated SVD returning the leading `rank` singular triplets.
+#
+# "auto" uses an exact eigendecomposition of the Gram matrix when the smaller
+# dimension is at most `gram_max` (fast and deterministic for fMRI, where the
+# number of time points is modest), and randomized SVD otherwise. Column signs
+# are fixed so that the largest-magnitude entry of each right singular vector
+# is positive, making results independent of the LAPACK/BLAS build.
+truncated_svd <- function(
+  X,
+  rank,
+  svd_engine = c("auto", "svd", "rsvd"),
+  seed = NULL,
+  return_u = TRUE,
+  gram_max = 2000L
+) {
   svd_engine <- match.arg(svd_engine)
   k <- min(as.integer(rank), min(dim(X)))
-  if (k < 1L) stop("rank must be >= 1")
+  if (k < 1L) stop("rank must be >= 1", call. = FALSE)
 
-  if (!is.null(seed)) set.seed(seed)
-
-  use_rsvd <- identical(svd_engine, "rsvd") ||
-    (identical(svd_engine, "auto") && k < min(dim(X)))
-
-  if (use_rsvd) {
-    out <- rsvd::rsvd(X, k = k, nu = k, nv = k)
-    return(list(u = out$u, d = out$d, v = out$v, engine = "rsvd"))
+  engine <- svd_engine
+  if (engine == "auto") {
+    engine <- if (min(dim(X)) <= gram_max) "gram" else "rsvd"
   }
 
-  out <- svd(X, nu = k, nv = k)
-  list(u = out$u, d = out$d[seq_len(k)], v = out$v, engine = "svd")
+  out <- switch(
+    engine,
+    gram = gram_svd(X, k, return_u = return_u),
+    svd = {
+      s <- svd(X, nu = if (return_u) k else 0L, nv = k)
+      list(u = if (return_u) s$u else NULL, d = s$d[seq_len(k)], v = s$v)
+    },
+    rsvd = {
+      s <- with_seed(seed, rsvd::rsvd(X, k = k, nu = if (return_u) k else 0L, nv = k, q = 4L))
+      list(u = if (return_u) s$u else NULL, d = s$d[seq_len(k)], v = s$v[, seq_len(k), drop = FALSE])
+    }
+  )
+
+  flip <- apply(out$v, 2, function(col) {
+    s <- sign(col[which.max(abs(col))])
+    if (s == 0) 1 else s
+  })
+  out$v <- sweep(out$v, 2, flip, `*`)
+  if (!is.null(out$u)) out$u <- sweep(out$u, 2, flip, `*`)
+  out$engine <- engine
+  out
 }
 
-#' One-shot CAA extraction in whitened PC subspace
+gram_svd <- function(X, k, return_u = TRUE) {
+  scale_d <- function(M, d) sweep(M, 2, ifelse(d > 0, d, 1), `/`)
+  if (nrow(X) >= ncol(X)) {
+    e <- eigen(crossprod(X), symmetric = TRUE)
+    d <- sqrt(pmax(e$values[seq_len(k)], 0))
+    v <- e$vectors[, seq_len(k), drop = FALSE]
+    u <- if (return_u) scale_d(X %*% v, d) else NULL
+  } else {
+    e <- eigen(tcrossprod(X), symmetric = TRUE)
+    d <- sqrt(pmax(e$values[seq_len(k)], 0))
+    u <- e$vectors[, seq_len(k), drop = FALSE]
+    v <- scale_d(crossprod(X, u), d)
+    if (!return_u) u <- NULL
+  }
+  list(u = u, d = d, v = v)
+}
+
+# Inverse symmetric square root of a covariance matrix, with a small ridge
+# relative to its average variance for numerical stability.
+inv_sqrt_sym <- function(C, ridge = 1e-8) {
+  C <- (C + t(C)) / 2
+  lam_ridge <- ridge * max(mean(diag(C)), .Machine$double.eps)
+  e <- eigen(C + diag(lam_ridge, nrow(C)), symmetric = TRUE)
+  vals <- pmax(e$values, lam_ridge)
+  e$vectors %*% (t(e$vectors) / sqrt(vals))
+}
+
+#' One-shot canonical autocorrelation analysis (CAA)
 #'
-#' @param Z_kt Numeric matrix with shape K x T (whitened reduced scores).
-#' @param n_candidates Number of candidates to return.
-#' @return A list with `scores` (T x L) and `predictability` (length L).
+#' Finds the linear combinations of a set of reduced time series that are
+#' maximally correlated with their own lag-1 values, by an exact lag-1
+#' canonical correlation analysis between \eqn{Z_{1:T-1}} and \eqn{Z_{2:T}}.
+#' This is the one-shot replacement for the repeated CAA search in PHYCAA+:
+#' one \eqn{K \times K} decomposition in a fixed low-rank space.
+#'
+#' Each component's time course is the left canonical projection applied to
+#' the full (centred) series, so components with negative lag-1
+#' autocorrelation (for example aliased cardiac noise near the Nyquist
+#' frequency) are recovered as well as positively autocorrelated ones.
+#'
+#' @param Z_kt Numeric matrix of reduced time series, components (rows) by
+#'   time points (columns); typically the leading right singular vectors of
+#'   the voxel data, transposed. Must have at least 4 time points.
+#' @param n_candidates Maximum number of components to return; at most
+#'   `nrow(Z_kt)` are returned.
+#' @return A list with elements
+#'   \describe{
+#'     \item{`scores`}{Time points x components matrix of component time
+#'       courses, each centred and scaled to unit variance.}
+#'     \item{`predictability`}{Canonical lag-1 correlations in \[0, 1\], in
+#'       decreasing order; the magnitude of each component's lag-1
+#'       predictability.}
+#'     \item{`autocorrelation`}{Signed lag-1 autocorrelation of each returned
+#'       time course.}
+#'     \item{`method`}{The string `"caa"`.}
+#'   }
+#' @references
+#' Churchill, N. W., & Strother, S. C. (2013). PHYCAA+: An optimized, adaptive
+#' procedure for measuring and controlling physiological noise in BOLD fMRI.
+#' *NeuroImage*, 82, 306--325. \doi{10.1016/j.neuroimage.2013.05.102}
+#' @examples
+#' set.seed(1)
+#' n <- 200
+#' ar <- as.numeric(stats::arima.sim(list(ar = 0.9), n))
+#' Z <- rbind(ar, matrix(rnorm(4 * n), 4, n))
+#' caa <- extract_caa_oneshot(Z, n_candidates = 3)
+#' round(caa$predictability, 2)
+#' abs(cor(caa$scores[, 1], ar))
 #' @export
 extract_caa_oneshot <- function(Z_kt, n_candidates = 30L) {
   Z_kt <- as.matrix(Z_kt)
+  if (!is.numeric(Z_kt) || any(!is.finite(Z_kt))) {
+    stop("Z_kt must be a finite numeric matrix.", call. = FALSE)
+  }
+  n_candidates <- check_count(n_candidates, "n_candidates")
   K <- nrow(Z_kt)
   T <- ncol(Z_kt)
-  if (T < 4L) stop("Need at least 4 time points for lagged extraction.")
-
-  Z0 <- Z_kt[, 1:(T - 1), drop = FALSE]
-  Z1 <- Z_kt[, 2:T, drop = FALSE]
-  M <- Z0 %*% t(Z1) / (T - 1)
-
-  decomp <- svd(M)
-  L <- min(as.integer(n_candidates), K, length(decomp$d))
-  comps <- matrix(0, nrow = T, ncol = L)
-  rho <- decomp$d[seq_len(L)]
-
-  for (k in seq_len(L)) {
-    s0 <- as.numeric(crossprod(decomp$u[, k], Z0))
-    s1 <- as.numeric(crossprod(decomp$v[, k], Z1))
-
-    tvec <- numeric(T)
-    cnt <- numeric(T)
-    tvec[1:(T - 1)] <- tvec[1:(T - 1)] + s0
-    cnt[1:(T - 1)] <- cnt[1:(T - 1)] + 1
-    tvec[2:T] <- tvec[2:T] + s1
-    cnt[2:T] <- cnt[2:T] + 1
-    tvec <- tvec / pmax(cnt, 1)
-    comps[, k] <- safe_scale_vec(tvec)
+  if (K < 1L) stop("Z_kt must have at least one row.", call. = FALSE)
+  if (T < 4L) stop("Need at least 4 time points for lagged extraction.", call. = FALSE)
+  if (K > T - 2L) {
+    stop(sprintf(
+      "Z_kt has %d series but only %d time points; lag-1 canonical analysis needs at most T - 2 series.",
+      K, T
+    ), call. = FALSE)
   }
 
+  Zc <- Z_kt - rowMeans(Z_kt)
+  Z0 <- Zc[, 1:(T - 1), drop = FALSE]
+  Z1 <- Zc[, 2:T, drop = FALSE]
+  Z0 <- Z0 - rowMeans(Z0)
+  Z1 <- Z1 - rowMeans(Z1)
+
+  W0 <- inv_sqrt_sym(tcrossprod(Z0))
+  W1 <- inv_sqrt_sym(tcrossprod(Z1))
+  decomp <- svd(W0 %*% tcrossprod(Z0, Z1) %*% W1)
+
+  L <- min(n_candidates, K)
+  A <- W0 %*% decomp$u[, seq_len(L), drop = FALSE]
+  comps <- crossprod(Zc, A)
+  comps <- apply(comps, 2, safe_scale_vec)
+  comps <- matrix(comps, nrow = T, ncol = L)
   colnames(comps) <- paste0("caa_", seq_len(L))
-  list(scores = comps, predictability = rho, method = "caa")
+
+  autocor <- apply(comps, 2, function(s) sum(s[-1] * s[-T]) / max(sum(s * s), .Machine$double.eps))
+
+  list(
+    scores = comps,
+    predictability = pmin(decomp$d[seq_len(L)], 1),
+    autocorrelation = as.numeric(autocor),
+    method = "caa"
+  )
 }
 
 extract_dynamic_components <- function(
   Z_kt,
   extractor = c("caa", "dicca", "dipca"),
   lag_order = 1L,
-  n_candidates = 30L
+  n_candidates = 30L,
+  seed = NULL
 ) {
   extractor <- match.arg(extractor)
   if (extractor == "caa") {
@@ -74,20 +183,18 @@ extract_dynamic_components <- function(
   }
 
   if (!requireNamespace("dipca", quietly = TRUE)) {
-    stop("extractor='dicca' or 'dipca' requires package 'dipca'.")
+    stop("extractor = '", extractor, "' requires package 'dipca' (https://bbuchsbaum.r-universe.dev).", call. = FALSE)
   }
 
   Z_tk <- t(Z_kt)
-  if (extractor == "dicca") {
-    fit <- dipca::dicca(Z_tk, s = as.integer(lag_order), l = as.integer(n_candidates))
+  l <- min(as.integer(n_candidates), ncol(Z_tk))
+  # dipca's fits draw random numbers; scope them so `seed` makes results
+  # reproducible and the caller's RNG stream is left untouched.
+  fit <- with_seed(seed, if (extractor == "dicca") {
+    dipca::dicca(Z_tk, s = as.integer(lag_order), l = l)
   } else {
-    fit <- dipca::dipca(
-      Z_tk,
-      s = as.integer(lag_order),
-      l = as.integer(n_candidates),
-      algorithm = "II"
-    )
-  }
+    dipca::dipca(Z_tk, s = as.integer(lag_order), l = l, algorithm = "II")
+  })
 
   scores <- as.matrix(fit$s)
   pred <- fit$R2
@@ -96,121 +203,120 @@ extract_dynamic_components <- function(
   list(scores = scores, predictability = as.numeric(pred), method = extractor, fit = fit)
 }
 
+# Squared Pearson correlation between every voxel time series (rows of X_nt)
+# and every component time course (columns of T_tl). NA where either series
+# has (numerically) zero variance, judged relative to the largest voxel and
+# component variance so the result does not depend on data units.
+r2_maps <- function(X_nt, T_tl, eps = 1e-12) {
+  Xc <- X_nt - rowMeans(X_nt)
+  Tc <- sweep(T_tl, 2, colMeans(T_tl), `-`)
+  xnorm2 <- rowSums(Xc * Xc)
+  tnorm2 <- colSums(Tc * Tc)
+  C <- Xc %*% Tc
+  R2 <- (C * C) / outer(xnorm2, tnorm2)
+  R2[xnorm2 <= eps * max(xnorm2, 0), ] <- NA_real_
+  R2[, tnorm2 <= eps * max(tnorm2, 0)] <- NA_real_
+  R2
+}
+
 score_components_nn_nt <- function(X_nt, T_tl, wNN, eps = 1e-12, use_cpp = TRUE) {
   X_nt <- as.matrix(X_nt)
   T_tl <- as.matrix(T_tl)
+  wNN <- as.numeric(wNN)
+  L <- ncol(T_tl)
+
+  if (L == 0L) {
+    return(list(ratio = numeric(0), med_nn = numeric(0), med_nt = numeric(0), r2_mean = numeric(0)))
+  }
+  if (!any(wNN < 0.5) || !any(wNN > 0.5)) {
+    stop("Need both non-neuronal (wNN < 0.5) and neuronal (wNN > 0.5) voxels for ratio scoring. Check wNN thresholds.", call. = FALSE)
+  }
 
   if (isTRUE(use_cpp) &&
       exists("score_components_nn_nt_cpp", mode = "function", inherits = TRUE) &&
-      cpp_symbol_available("_phynd_score_components_nn_nt_cpp")) {
-    return(score_components_nn_nt_cpp(X_nt = X_nt, T_tl = T_tl, wNN = as.numeric(wNN), eps = eps))
+      cpp_symbol_available("_fmriphysio_score_components_nn_nt_cpp")) {
+    Tc <- sweep(T_tl, 2, colMeans(T_tl), `-`)
+    return(score_components_nn_nt_cpp(X_nt = X_nt - rowMeans(X_nt), T_tl = Tc, wNN = wNN, eps = eps))
   }
 
-  if (ncol(T_tl) == 0L) {
-    return(list(ratio = numeric(0), med_nn = numeric(0), med_nt = numeric(0), r2_mean = numeric(0)))
-  }
+  R2 <- r2_maps(X_nt, T_tl, eps = eps)
+  nn <- wNN < 0.5
+  nt <- wNN > 0.5
+  med <- function(v) if (any(is.finite(v))) stats::median(v, na.rm = TRUE) else NA_real_
+  med_nn <- apply(R2[nn, , drop = FALSE], 2, med)
+  med_nt <- apply(R2[nt, , drop = FALSE], 2, med)
+  r2_mean <- apply(R2, 2, function(v) if (any(is.finite(v))) mean(v, na.rm = TRUE) else NA_real_)
+  ratio <- ifelse(is.na(med_nn) | is.na(med_nt), NA_real_, med_nn / pmax(med_nt, eps))
 
-  xnorm2 <- rowSums(X_nt * X_nt)
-  nn_idx <- which(wNN < 0.5)
-  nt_idx <- which(wNN > 0.5)
-  if (length(nn_idx) == 0L || length(nt_idx) == 0L) {
-    stop("Need both NN and NT voxels for ratio scoring. Check wNN thresholds.")
-  }
-
-  L <- ncol(T_tl)
-  ratio <- numeric(L)
-  med_nn <- numeric(L)
-  med_nt <- numeric(L)
-  r2_mean <- numeric(L)
-
-  for (k in seq_len(L)) {
-    tk <- T_tl[, k]
-    tnorm2 <- sum(tk * tk)
-    if (!is.finite(tnorm2) || tnorm2 < eps) {
-      ratio[k] <- 0
-      med_nn[k] <- 0
-      med_nt[k] <- 0
-      r2_mean[k] <- 0
-      next
-    }
-
-    cvec <- as.numeric(X_nt %*% tk)
-    r2 <- (cvec * cvec) / pmax(xnorm2 * tnorm2, eps)
-    mn <- stats::median(r2[nn_idx], na.rm = TRUE)
-    mt <- stats::median(r2[nt_idx], na.rm = TRUE)
-
-    ratio[k] <- mn / pmax(mt, eps)
-    med_nn[k] <- mn
-    med_nt[k] <- mt
-    r2_mean[k] <- mean(r2, na.rm = TRUE)
-  }
-
-  list(ratio = ratio, med_nn = med_nn, med_nt = med_nt, r2_mean = r2_mean)
+  list(ratio = as.numeric(ratio), med_nn = as.numeric(med_nn), med_nt = as.numeric(med_nt), r2_mean = as.numeric(r2_mean))
 }
 
-compute_split_stability <- function(
+# Split-half reproducibility of candidate components (design notes, 6.4).
+#
+# Candidates are re-extracted independently in each half of the run, using
+# the same per-voxel extraction `weights` as the full-data pass. A
+# full-data candidate is stable when its voxelwise R^2 map matches a
+# half-1 component and a half-2 component, and those two half components
+# match each other -- the half-1/half-2 match is computed on disjoint data,
+# so components that do not reproduce across time fail.
+component_stability <- function(
   X_nt,
+  weights,
+  T_tl,
   pca_rank,
   extractor,
   lag_order,
   n_candidates,
+  thresh = 0.30,
   svd_engine = "auto",
   seed = NULL
 ) {
+  L <- ncol(T_tl)
+  if (L == 0L) {
+    return(list(stable = logical(0), score = numeric(0)))
+  }
   T <- ncol(X_nt)
-  i1 <- seq_len(floor(T / 2))
-  i2 <- seq(from = floor(T / 2) + 1L, to = T)
+  halves <- list(seq_len(floor(T / 2)), seq.int(floor(T / 2) + 1L, T))
 
-  stab_half <- function(X_half, n_ref) {
-    sv <- truncated_svd(X_half, rank = min(pca_rank, min(dim(X_half))), svd_engine = svd_engine, seed = seed)
-    Z <- t(sv$v)
+  half_maps <- lapply(halves, function(idx) {
+    Xh <- center_rows(X_nt[, idx, drop = FALSE])
+    k <- min(as.integer(pca_rank), floor(length(idx) / 3), sum(weights > 0))
+    if (k < 1L) return(NULL)
+    sv <- truncated_svd(Xh * weights, rank = k, svd_engine = svd_engine, seed = seed, return_u = FALSE)
+    ok <- sv$d > null_sv_tol * max(sv$d[1], .Machine$double.eps)
+    if (!any(ok)) return(NULL)
     ext <- extract_dynamic_components(
-      Z_kt = Z,
+      Z_kt = t(sv$v[, ok, drop = FALSE]),
       extractor = extractor,
       lag_order = lag_order,
-      n_candidates = n_ref
+      n_candidates = n_candidates,
+      seed = seed
     )
-    ext$scores
+    r2_maps(Xh, as.matrix(ext$scores))
+  })
+
+  if (any(vapply(half_maps, is.null, logical(1)))) {
+    return(list(stable = rep(FALSE, L), score = rep(NA_real_, L)))
   }
 
-  S1 <- stab_half(X_nt[, i1, drop = FALSE], n_ref = n_candidates)
-  S2 <- stab_half(X_nt[, i2, drop = FALSE], n_ref = n_candidates)
-
-  list(scores_h1 = S1, scores_h2 = S2, idx_h1 = i1, idx_h2 = i2)
-}
-
-stability_filter <- function(T_tl, split_obj, thresh = 0.30, use_cpp = TRUE) {
-  if (ncol(T_tl) == 0L) return(logical(0))
-  S1 <- split_obj$scores_h1
-  S2 <- split_obj$scores_h2
-  i1 <- split_obj$idx_h1
-  i2 <- split_obj$idx_h2
-
-  if (isTRUE(use_cpp) &&
-      exists("stability_filter_cpp", mode = "function", inherits = TRUE) &&
-      cpp_symbol_available("_phynd_stability_filter_cpp")) {
-    return(as.logical(stability_filter_cpp(
-      T_tl = as.matrix(T_tl),
-      S1 = as.matrix(S1),
-      S2 = as.matrix(S2),
-      i1 = as.integer(i1),
-      i2 = as.integer(i2),
-      thresh = thresh
-    )))
+  map_cor <- function(A, B) {
+    A[!is.finite(A)] <- 0
+    B[!is.finite(B)] <- 0
+    out <- suppressWarnings(stats::cor(A, B))
+    out[!is.finite(out)] <- 0
+    out
   }
 
-  keep <- rep(FALSE, ncol(T_tl))
-  for (k in seq_len(ncol(T_tl))) {
-    t1 <- safe_scale_vec(T_tl[i1, k])
-    t2 <- safe_scale_vec(T_tl[i2, k])
+  R_full <- r2_maps(X_nt, T_tl)
+  C1 <- map_cor(R_full, half_maps[[1]])
+  C2 <- map_cor(R_full, half_maps[[2]])
+  C12 <- map_cor(half_maps[[1]], half_maps[[2]])
 
-    c1 <- apply(S1, 2, function(v) abs(stats::cor(t1, safe_scale_vec(v))))
-    c2 <- apply(S2, 2, function(v) abs(stats::cor(t2, safe_scale_vec(v))))
+  score <- vapply(seq_len(L), function(k) {
+    j1 <- which.max(C1[k, ])
+    j2 <- which.max(C2[k, ])
+    min(C1[k, j1], C2[k, j2], C12[j1, j2])
+  }, numeric(1))
 
-    m1 <- if (length(c1)) max(c1, na.rm = TRUE) else 0
-    m2 <- if (length(c2)) max(c2, na.rm = TRUE) else 0
-    keep[k] <- is.finite(m1) && is.finite(m2) && min(m1, m2) >= thresh
-  }
-
-  keep
+  list(stable = score >= thresh, score = score)
 }

@@ -2,12 +2,12 @@
 % Please edit documentation in R/compcor.R
 \name{compcor_denoise}
 \alias{compcor_denoise}
-\title{CompCor-style denoising (aCompCor / tCompCor)}
+\title{CompCor denoising (aCompCor / tCompCor)}
 \usage{
 compcor_denoise(
   x,
   tr,
-  mode = c("acompcorr", "tcompcorr"),
+  mode = c("acompcor", "tcompcor"),
   n_comp = 5L,
   mask = NULL,
   nuisance_mask = NULL,
@@ -16,59 +16,160 @@ compcor_denoise(
   top_var_frac = 0.02,
   top_var_n = NULL,
   design = NULL,
-  center_rows_first = TRUE,
-  svd_engine = c("auto", "rsvd", "svd"),
+  pre_highpass = c("none", "dct"),
+  highpass_hz = 1/128,
+  orientation = c("auto", "voxels_by_time", "time_by_voxels"),
+  svd_engine = c("auto", "svd", "rsvd"),
   seed = NULL,
   return_diagnostics = TRUE
 )
 }
 \arguments{
-\item{x}{Matrix-like data (voxels x time or time x voxels).}
+\item{x}{Numeric data: a voxels x time matrix, a time x voxels matrix (see
+\code{orientation}), a 4D array with time last, or a \code{neuroim2::NeuroVec}
+image (only voxels inside a \code{SparseNeuroVec}'s mask are analysed).}
 
 \item{tr}{Repetition time in seconds.}
 
-\item{mode}{One of "acompcorr" or "tcompcorr".}
+\item{mode}{\code{"acompcor"} (nuisance voxels from a mask or wNN map) or
+\code{"tcompcor"} (highest-variance voxels).}
 
-\item{n_comp}{Number of principal regressors to remove.}
+\item{n_comp}{Number of principal components to remove (at least 1).}
 
-\item{mask}{Optional voxel mask (logical or indices) applied before processing.}
+\item{mask}{Optional analysis mask (logical vector, voxel indices, 3D
+array, or \code{neuroim2::LogicalNeuroVol}). Only masked voxels are cleaned.}
 
-\item{nuisance_mask}{Optional voxel mask for aCompCor ROI (logical or indices).}
+\item{nuisance_mask}{Optional nuisance region for \code{"acompcor"}, in the same
+forms as \code{mask}, over all voxels of \code{x}.}
 
-\item{wnn}{Optional wNN vector; used for aCompCor when nuisance_mask is not provided.}
+\item{wnn}{Optional wNN weights for \code{"acompcor"} (1 = neuronal, 0 =
+non-neuronal), over all voxels of \code{x} or over the masked voxels.}
 
-\item{wnn_thresh}{wNN threshold for aCompCor voxel selection.}
+\item{wnn_thresh}{Voxels with wNN below this value (in [0, 1]) are
+nuisance voxels in \code{"acompcor"}.}
 
-\item{top_var_frac}{Fraction of highest-variance voxels for tCompCor.}
+\item{top_var_frac}{Fraction (in (0, 1]) of analysed voxels used by
+\code{"tcompcor"} when \code{top_var_n} is \code{NULL}.}
 
-\item{top_var_n}{Optional explicit number of voxels for tCompCor.}
+\item{top_var_n}{Optional number of highest-variance voxels for
+\code{"tcompcor"}; clamped to between \code{n_comp} and the number of analysed
+voxels.}
 
-\item{design}{Optional design matrix (time x predictors) for guardrail orthogonalization.}
+\item{design}{Optional design matrix (time x predictors). See the design
+guardrail in Details.}
 
-\item{center_rows_first}{Whether to mean-center voxel time series first.}
+\item{pre_highpass}{\code{"none"} or \code{"dct"}: remove a discrete cosine basis
+with cutoff \code{highpass_hz} from the analysed voxels before estimating and
+removing components.}
 
-\item{svd_engine}{SVD backend for PCA ("auto", "rsvd", "svd").}
+\item{highpass_hz}{High-pass cutoff in Hz for \code{pre_highpass = "dct"}
+(default 1/128 Hz); must be below the Nyquist frequency \code{1 / (2 * tr)}.}
 
-\item{seed}{Optional random seed.}
+\item{orientation}{\code{"auto"} (voxels x time unless there are fewer rows than
+columns), \code{"voxels_by_time"}, or \code{"time_by_voxels"}.}
 
-\item{return_diagnostics}{Return detailed diagnostics.}
+\item{svd_engine}{\code{"auto"}, \code{"svd"}, or \code{"rsvd"}; see
+\code{\link[=fast_phy_denoise]{fast_phy_denoise()}}.}
+
+\item{seed}{Optional integer seed for the randomized SVD. The caller's
+random-number stream is left untouched.}
+
+\item{return_diagnostics}{Whether to include the \code{diagnostics} element.}
 }
 \value{
-A list with cleaned data, regressors, and diagnostics.
+An object of class \code{"compcor_denoise_result"}: a list with
+\describe{
+\item{\code{x_clean}}{Denoised data of the same type, shape, and orientation
+as \code{x} (a \code{NeuroVec} input gives a \code{DenseNeuroVec} or
+\code{SparseNeuroVec} in the same space), voxel means retained.}
+\item{\code{regressors}}{Matrix, time x components: the removed components,
+each scaled to unit variance (zero columns if none remain).}
+\item{\code{wNN}}{wNN weights over all voxels (\code{NA} where unavailable) when a
+wNN map was used to select nuisance voxels, otherwise \code{NULL}.}
+\item{\code{nuisance_voxels}}{Logical vector over all voxels: the voxels whose
+time series formed the PCA.}
+\item{\code{active}}{Logical vector over all voxels: the voxels that were
+cleaned.}
+\item{\code{mode}, \code{tr}}{As supplied.}
+\item{\code{params}}{List of settings, including \code{n_comp} (requested) and
+\code{n_comp_used}.}
+\item{\code{diagnostics}}{When \code{return_diagnostics = TRUE}: input
+information, voxel counts, the source of the nuisance selection,
+singular values, the high-pass basis, the design columns dropped by the
+guardrail, and the wNN computation (for automatic wNN).}
+}
 }
 \description{
-CompCor-style denoising (aCompCor / tCompCor)
+Removes the principal temporal components of a nuisance voxel set from
+every analysed voxel, following the component-based noise correction
+(CompCor) method of Behzadi et al. (2007). It serves as a fixed-rank
+baseline against which \code{\link[=fast_phy_denoise]{fast_phy_denoise()}} can be compared.
 }
 \details{
-This function provides an explicit reduced baseline that maps onto CompCor:
+\strong{Choosing nuisance voxels.}
 \itemize{
-\item \code{mode = "acompcorr"} reduces to an anatomical/noise-ROI CompCor variant:
-nuisance voxels are selected from \code{nuisance_mask} when provided; otherwise
-from \code{wnn < wnn_thresh} (or auto-derived \code{wNN}).
-\item \code{mode = "tcompcorr"} reduces to temporal CompCor:
-nuisance voxels are selected by highest temporal variance.
+\item \code{mode = "acompcor"} (anatomical CompCor) uses the voxels in
+\code{nuisance_mask} when it is supplied; otherwise voxels whose wNN weight is
+below \code{wnn_thresh}, using \code{wnn} when supplied and otherwise a map computed
+with \code{\link[=compute_wNN_diff_energy]{compute_wNN_diff_energy()}} from the analysed voxels.
+\item \code{mode = "tcompcor"} (temporal CompCor) uses the \code{top_var_n} analysed
+voxels with the highest temporal variance after detrending (by default
+the larger of \code{5 * n_comp} and \code{top_var_frac} of the analysed voxels).
 }
 
-In both modes, principal nuisance regressors are extracted from the selected
-voxel set and projected out from all voxels in one linear projection step.
+\code{nuisance_mask} and \code{wnn} are indexed over \emph{all} voxels of \code{x} and are
+independent of \code{mask}, so a white-matter/CSF region outside the analysis
+mask can supply the regressors. A \code{wnn} of length \code{sum(mask)} is also
+accepted and read as covering the masked voxels; \code{NA} weights never select
+a voxel.
+
+\strong{Estimating components.} Each nuisance voxel time series has its mean and
+linear trend removed (and the cosine high-pass basis, when
+\code{pre_highpass = "dct"}) and is scaled to unit variance before the PCA, as
+in Behzadi et al. (2007). Components whose singular value is below
+\code{1e-6} times the largest are discarded, so no more components are removed
+than the nuisance data support; a warning is given when fewer than
+\code{n_comp} remain.
+
+\strong{Cleaning.} The components are projected out of every analysed voxel in
+one orthogonal projection, and each voxel's mean is added back. Voxels
+outside \code{mask}, constant voxels, and voxels with non-finite values are
+returned unchanged. With \code{pre_highpass = "dct"} the output is also high-pass
+filtered (the cosine basis is removed from the analysed voxels); the basis
+is returned in \code{diagnostics$highpass$basis}.
+
+\strong{Design guardrail.} When \code{design} is supplied, the regressors are made
+orthogonal to the design (plus an intercept) before removal. Least-squares
+task estimates computed from \code{x_clean} are then identical to those from
+\code{x}: the guardrail protects task signal but also leaves any
+task-correlated physiological noise in place. With \code{pre_highpass = "dct"}
+the regressors are also kept orthogonal to the cosine basis, so the output
+stays high-passed, and the guarantee holds for the high-passed design.
+
+\strong{Relation to fMRIPrep.} This is a CompCor-style baseline, not a
+reimplementation of the fMRIPrep/NiWorkflows confounds pipeline. Mask
+construction and erosion, censoring, and the component-retention rule
+(a fixed \code{n_comp} here, a variance-explained threshold in fMRIPrep) differ.
+Use fMRIPrep's confounds directly when exact parity is required.
+}
+\examples{
+sim <- simulate_phy_data(n_vox = 400, n_time = 120, tr = 2, seed = 1)
+
+# aCompCor with a known nuisance region
+fit <- compcor_denoise(sim$x, tr = 2, mode = "acompcor",
+                       nuisance_mask = sim$nn, n_comp = 3)
+fit
+
+# tCompCor with a high-pass filter
+fit_t <- compcor_denoise(sim$x, tr = 2, mode = "tcompcor", n_comp = 3,
+                         pre_highpass = "dct")
+dim(fit_t$regressors)
+}
+\references{
+Behzadi, Y., Restom, K., Liau, J., & Liu, T. T. (2007). A component based
+noise correction method (CompCor) for BOLD and perfusion based fMRI.
+\emph{NeuroImage}, 37(1), 90--101. \doi{10.1016/j.neuroimage.2007.04.042}
+}
+\seealso{
+\code{\link[=fast_phy_denoise]{fast_phy_denoise()}}, \code{\link[=compute_design_free_qc]{compute_design_free_qc()}}
 }

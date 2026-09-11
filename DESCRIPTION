@@ -1,12 +1,27 @@
-Package: phynd
+Package: fmriphysio
 Type: Package
-Title: Fast Design-Free Physiological Denoising
+Title: Fast Design-Free Physiological Denoising for Functional MRI
 Version: 0.0.0.9000
-Authors@R: person("Ben", "Buchsbaum", email = "ben@example.org", role = c("aut", "cre"))
-Description: Fast, design-free physiological denoising inspired by PHYCAA+ using
-    low-rank dynamic component extraction with optional DiCCA/DiPCA integration.
+Authors@R: person("Bradley", "Buchsbaum", email = "brad.buchsbaum@gmail.com", role = c("aut", "cre"))
+Description: Removes physiological noise from blood-oxygen-level-dependent
+    (BOLD) functional magnetic resonance imaging (fMRI) time series without
+    requiring a task design. Following the logic of PHYCAA+ (Churchill and
+    Strother (2013) <doi:10.1016/j.neuroimage.2013.05.102>), a fast
+    temporal-difference energy map separates likely neuronal voxels from
+    non-neuronal voxels such as vasculature and cerebrospinal fluid.
+    Temporally predictable components are extracted from a low-rank subspace,
+    retained when they load more strongly on non-neuronal than on neuronal
+    voxels, and projected out of the data. Components are extracted by one-shot
+    canonical autocorrelation analysis or, through the 'dipca' package, by
+    dynamic-inner canonical correlation or principal component analysis (Dong
+    and Qin (2018) <doi:10.1016/j.jprocont.2017.05.002>). A CompCor baseline
+    (Behzadi et al. (2007) <doi:10.1016/j.neuroimage.2007.04.042>) and
+    design-free quality-control metrics are included for comparison.
 License: MIT + file LICENSE
+URL: https://github.com/bbuchsbaum/fmriphysio
+BugReports: https://github.com/bbuchsbaum/fmriphysio/issues
 Encoding: UTF-8
+Language: en-US
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Depends: 
@@ -16,16 +31,17 @@ Imports:
     stats,
     utils,
     Rcpp,
-    rsvd
+    rsvd,
+    neuroim2 (>= 0.13.0)
 LinkingTo:
     Rcpp,
     RcppArmadillo
 Suggests:
-    testthat (>= 3.0.0),
+    testthat (>= 3.1.7),
     dipca,
-    neuroim2,
     jsonlite,
     knitr,
     rmarkdown
+Additional_repositories: https://bbuchsbaum.r-universe.dev
 VignetteBuilder: knitr
 Config/testthat/edition: 3

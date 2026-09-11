@@ -13,7 +13,7 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 
 // score_components_nn_nt_cpp
 Rcpp::List score_components_nn_nt_cpp(const arma::mat& X_nt, const arma::mat& T_tl, const arma::vec& wNN, const double eps);
-RcppExport SEXP _phynd_score_components_nn_nt_cpp(SEXP X_ntSEXP, SEXP T_tlSEXP, SEXP wNNSEXP, SEXP epsSEXP) {
+RcppExport SEXP _fmriphysio_score_components_nn_nt_cpp(SEXP X_ntSEXP, SEXP T_tlSEXP, SEXP wNNSEXP, SEXP epsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -25,30 +25,13 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// stability_filter_cpp
-Rcpp::LogicalVector stability_filter_cpp(const arma::mat& T_tl, const arma::mat& S1, const arma::mat& S2, const Rcpp::IntegerVector& i1, const Rcpp::IntegerVector& i2, const double thresh);
-RcppExport SEXP _phynd_stability_filter_cpp(SEXP T_tlSEXP, SEXP S1SEXP, SEXP S2SEXP, SEXP i1SEXP, SEXP i2SEXP, SEXP threshSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const arma::mat& >::type T_tl(T_tlSEXP);
-    Rcpp::traits::input_parameter< const arma::mat& >::type S1(S1SEXP);
-    Rcpp::traits::input_parameter< const arma::mat& >::type S2(S2SEXP);
-    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type i1(i1SEXP);
-    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type i2(i2SEXP);
-    Rcpp::traits::input_parameter< const double >::type thresh(threshSEXP);
-    rcpp_result_gen = Rcpp::wrap(stability_filter_cpp(T_tl, S1, S2, i1, i2, thresh));
-    return rcpp_result_gen;
-END_RCPP
-}
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_phynd_score_components_nn_nt_cpp", (DL_FUNC) &_phynd_score_components_nn_nt_cpp, 4},
-    {"_phynd_stability_filter_cpp", (DL_FUNC) &_phynd_stability_filter_cpp, 6},
+    {"_fmriphysio_score_components_nn_nt_cpp", (DL_FUNC) &_fmriphysio_score_components_nn_nt_cpp, 4},
     {NULL, NULL, 0}
 };
 
-RcppExport void R_init_phynd(DllInfo *dll) {
+RcppExport void R_init_fmriphysio(DllInfo *dll) {
     R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
     R_useDynamicSymbols(dll, FALSE);
 }

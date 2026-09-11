@@ -2,18 +2,31 @@
 % Please edit documentation in R/benchmark_qc.R
 \name{write_qc_artifact}
 \alias{write_qc_artifact}
-\title{Write QC artifact to file}
+\title{Write a QC summary to disk}
 \usage{
 write_qc_artifact(qc, file)
 }
 \arguments{
-\item{qc}{QC list from compute_design_free_qc().}
+\item{qc}{QC list from \code{\link[=compute_design_free_qc]{compute_design_free_qc()}}.}
 
-\item{file}{Path ending in .rds, .csv, or .json.}
+\item{file}{Output path; the format is chosen from its extension (\code{.rds},
+\code{.csv}, or \code{.json}, case-insensitive).}
 }
 \value{
-Invisibly returns file path.
+\code{file}, invisibly.
 }
 \description{
-Write QC artifact to file
+Saves the list returned by \code{\link[=compute_design_free_qc]{compute_design_free_qc()}} as an R object
+(\code{.rds}), a two-column \verb{metric,value} table (\code{.csv}, nested entries such
+as \code{ratio_summary} flattened to \code{ratio_summary.min} etc.), or JSON
+(\code{.json}, requires the 'jsonlite' package; missing and non-finite values
+are written as \code{null}).
+}
+\examples{
+sim <- simulate_phy_data(n_vox = 300, n_time = 120, seed = 1)
+fit <- compcor_denoise(sim$x, tr = 2, nuisance_mask = sim$nn, n_comp = 2)
+qc <- compute_design_free_qc(sim$x, fit$x_clean, wNN = ifelse(sim$nn, 0, 1))
+path <- tempfile(fileext = ".csv")
+write_qc_artifact(qc, path)
+head(read.csv(path))
 }

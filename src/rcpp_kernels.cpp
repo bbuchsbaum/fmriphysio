@@ -1,34 +1,39 @@
 // [[Rcpp::depends(RcppArmadillo)]]
 #include <RcppArmadillo.h>
 
+#include <algorithm>
+#include <vector>
+
 using namespace Rcpp;
 
 namespace {
 
-inline arma::vec zscore_vec(const arma::vec& x, const double eps = 1e-12) {
-  if (x.n_elem == 0) return arma::vec();
-  const double mu = arma::mean(x);
-  arma::vec xc = x - mu;
-  const double sd = std::sqrt(arma::dot(xc, xc) / std::max(1.0, static_cast<double>(x.n_elem - 1)));
-  if (!std::isfinite(sd) || sd < eps) {
-    return arma::zeros<arma::vec>(x.n_elem);
+// Median of the finite entries of r2[idx]; NA when none are finite.
+// Matches stats::median (mean of the two middle values for even counts).
+double finite_median(const arma::vec& r2, const arma::uvec& idx) {
+  std::vector<double> vals;
+  vals.reserve(idx.n_elem);
+  for (arma::uword i = 0; i < idx.n_elem; ++i) {
+    const double v = r2[idx[i]];
+    if (std::isfinite(v)) vals.push_back(v);
   }
-  return xc / sd;
-}
-
-inline double safe_abs_cor(const arma::vec& a, const arma::vec& b, const double eps = 1e-12) {
-  if (a.n_elem != b.n_elem || a.n_elem < 2) return 0.0;
-  arma::vec az = zscore_vec(a, eps);
-  arma::vec bz = zscore_vec(b, eps);
-  double denom = static_cast<double>(a.n_elem - 1);
-  if (denom <= 0) return 0.0;
-  double r = arma::dot(az, bz) / denom;
-  if (!std::isfinite(r)) return 0.0;
-  return std::abs(r);
+  const std::size_t n = vals.size();
+  if (n == 0) return NA_REAL;
+  const std::size_t mid = n / 2;
+  std::nth_element(vals.begin(), vals.begin() + mid, vals.end());
+  const double upper = vals[mid];
+  if (n % 2 == 1) return upper;
+  const double lower = *std::max_element(vals.begin(), vals.begin() + mid);
+  return 0.5 * (lower + upper);
 }
 
 } // namespace
 
+// Voxelwise squared correlation of each component with the (row-centred)
+// data, summarised as median R^2 in non-neuronal (wNN < 0.5) and neuronal
+// (wNN > 0.5) voxels. Expects X_nt rows and T_tl columns already centred.
+// Zero-variance voxels and components are judged relative to the largest
+// one (tolerance `eps`), matching r2_maps() in R.
 // [[Rcpp::export]]
 Rcpp::List score_components_nn_nt_cpp(
   const arma::mat& X_nt,
@@ -44,103 +49,52 @@ Rcpp::List score_components_nn_nt_cpp(
   }
 
   const arma::uword L = T_tl.n_cols;
-  arma::vec ratio(L, arma::fill::zeros);
-  arma::vec med_nn(L, arma::fill::zeros);
-  arma::vec med_nt(L, arma::fill::zeros);
-  arma::vec r2_mean(L, arma::fill::zeros);
+  NumericVector ratio(L, NA_REAL);
+  NumericVector med_nn(L, NA_REAL);
+  NumericVector med_nt(L, NA_REAL);
+  NumericVector r2_mean(L, NA_REAL);
 
   if (L == 0) {
-    return Rcpp::List::create(
-      _["ratio"] = ratio,
-      _["med_nn"] = med_nn,
-      _["med_nt"] = med_nt,
-      _["r2_mean"] = r2_mean
+    return List::create(
+      _["ratio"] = ratio, _["med_nn"] = med_nn,
+      _["med_nt"] = med_nt, _["r2_mean"] = r2_mean
     );
   }
 
-  arma::uvec nn_idx = arma::find(wNN < 0.5);
-  arma::uvec nt_idx = arma::find(wNN > 0.5);
+  const arma::uvec nn_idx = arma::find(wNN < 0.5);
+  const arma::uvec nt_idx = arma::find(wNN > 0.5);
   if (nn_idx.n_elem == 0 || nt_idx.n_elem == 0) {
-    stop("Need both NN and NT voxels for ratio scoring.");
+    stop("Need both non-neuronal (wNN < 0.5) and neuronal (wNN > 0.5) voxels for ratio scoring.");
   }
 
-  arma::vec xnorm2 = arma::sum(arma::square(X_nt), 1);
+  const arma::vec xnorm2 = arma::sum(arma::square(X_nt), 1);
+  const arma::rowvec tnorm2_all = arma::sum(arma::square(T_tl), 0);
+  const double x_tol = eps * std::max(xnorm2.max(), 0.0);
+  const double t_tol = eps * std::max(tnorm2_all.max(), 0.0);
+  const arma::uvec x_null = arma::find(xnorm2 <= x_tol);
 
   for (arma::uword k = 0; k < L; ++k) {
-    arma::vec tk = T_tl.col(k);
-    const double tnorm2 = arma::dot(tk, tk);
-    if (!std::isfinite(tnorm2) || tnorm2 < eps) {
-      continue;
-    }
+    const double tnorm2 = tnorm2_all[k];
+    if (!std::isfinite(tnorm2) || tnorm2 <= t_tol) continue;
 
-    arma::vec cvec = X_nt * tk;
-    arma::vec denom = xnorm2 * tnorm2;
-    denom.transform([eps](double d) { return std::max(d, eps); });
-    arma::vec r2 = arma::square(cvec) / denom;
+    const arma::vec cvec = X_nt * T_tl.col(k);
+    arma::vec r2 = arma::square(cvec) / (xnorm2 * tnorm2);
+    r2.elem(x_null).fill(arma::datum::nan);
 
-    const double mn = arma::median(r2.elem(nn_idx));
-    const double mt = arma::median(r2.elem(nt_idx));
-
+    const double mn = finite_median(r2, nn_idx);
+    const double mt = finite_median(r2, nt_idx);
     med_nn[k] = mn;
     med_nt[k] = mt;
-    ratio[k] = mn / std::max(mt, eps);
-    r2_mean[k] = arma::mean(r2);
+    if (!NumericVector::is_na(mn) && !NumericVector::is_na(mt)) {
+      ratio[k] = mn / std::max(mt, eps);
+    }
+
+    const arma::vec finite_r2 = r2.elem(arma::find_finite(r2));
+    if (finite_r2.n_elem > 0) r2_mean[k] = arma::mean(finite_r2);
   }
 
-  return Rcpp::List::create(
-    _["ratio"] = ratio,
-    _["med_nn"] = med_nn,
-    _["med_nt"] = med_nt,
-    _["r2_mean"] = r2_mean
+  return List::create(
+    _["ratio"] = ratio, _["med_nn"] = med_nn,
+    _["med_nt"] = med_nt, _["r2_mean"] = r2_mean
   );
-}
-
-// [[Rcpp::export]]
-Rcpp::LogicalVector stability_filter_cpp(
-  const arma::mat& T_tl,
-  const arma::mat& S1,
-  const arma::mat& S2,
-  const Rcpp::IntegerVector& i1,
-  const Rcpp::IntegerVector& i2,
-  const double thresh = 0.30
-) {
-  if (T_tl.n_cols == 0) return Rcpp::LogicalVector(0);
-
-  const arma::uword L = T_tl.n_cols;
-  Rcpp::LogicalVector keep(L, false);
-
-  arma::uvec idx1(i1.size());
-  arma::uvec idx2(i2.size());
-  for (int j = 0; j < i1.size(); ++j) {
-    int id = i1[j] - 1;
-    if (id < 0 || id >= static_cast<int>(T_tl.n_rows)) stop("i1 contains out-of-range indices.");
-    idx1[j] = static_cast<arma::uword>(id);
-  }
-  for (int j = 0; j < i2.size(); ++j) {
-    int id = i2[j] - 1;
-    if (id < 0 || id >= static_cast<int>(T_tl.n_rows)) stop("i2 contains out-of-range indices.");
-    idx2[j] = static_cast<arma::uword>(id);
-  }
-
-  for (arma::uword k = 0; k < L; ++k) {
-    arma::vec tk = T_tl.col(k);
-    arma::vec t1 = zscore_vec(tk.elem(idx1));
-    arma::vec t2 = zscore_vec(tk.elem(idx2));
-
-    double m1 = 0.0;
-    double m2 = 0.0;
-
-    for (arma::uword j = 0; j < S1.n_cols; ++j) {
-      double c = safe_abs_cor(t1, S1.col(j));
-      if (c > m1) m1 = c;
-    }
-    for (arma::uword j = 0; j < S2.n_cols; ++j) {
-      double c = safe_abs_cor(t2, S2.col(j));
-      if (c > m2) m2 = c;
-    }
-
-    keep[k] = std::isfinite(m1) && std::isfinite(m2) && (std::min(m1, m2) >= thresh);
-  }
-
-  return keep;
 }

@@ -2,13 +2,15 @@
 % Please edit documentation in R/benchmark_qc.R
 \name{benchmark_fast_phy_denoise}
 \alias{benchmark_fast_phy_denoise}
-\title{Benchmark fast_phy_denoise across dimensions and SVD engines}
+\title{Benchmark fast_phy_denoise on simulated data}
 \usage{
 benchmark_fast_phy_denoise(
-  grid_n_vox = c(4000L),
-  grid_n_time = c(400L),
-  svd_engines = c("svd", "rsvd"),
+  grid_n_vox = 4000L,
+  grid_n_time = 400L,
+  engines = c("svd", "rsvd"),
   reps = 1L,
+  tr = 2,
+  extractor = c("caa", "dicca", "dipca"),
   out_file = NULL,
   seed = 1L,
   ...
@@ -17,21 +19,48 @@ benchmark_fast_phy_denoise(
 \arguments{
 \item{grid_n_vox}{Integer vector of voxel counts.}
 
-\item{grid_n_time}{Integer vector of time lengths.}
+\item{grid_n_time}{Integer vector of time-series lengths.}
 
-\item{svd_engines}{Character vector of SVD engines to compare.}
+\item{engines}{Character vector of SVD engines to compare (any of
+\code{"auto"}, \code{"svd"}, \code{"rsvd"}).}
 
-\item{reps}{Number of repetitions per configuration.}
+\item{reps}{Number of simulated datasets per size (at least 1).}
 
-\item{out_file}{Optional CSV path for machine-readable results.}
+\item{tr}{Repetition time in seconds used to simulate and denoise.}
 
-\item{seed}{Seed base.}
+\item{extractor}{Component extractor passed to \code{\link[=fast_phy_denoise]{fast_phy_denoise()}}.}
 
-\item{...}{Additional arguments passed to fast_phy_denoise.}
+\item{out_file}{Optional path; results are also written there as CSV.}
+
+\item{seed}{Base seed. Dataset \code{i} is simulated with seed \code{seed + i}, and
+the same seed is passed to \code{\link[=fast_phy_denoise]{fast_phy_denoise()}}. The caller's
+random-number stream is left untouched. Use \code{NULL} for unseeded runs.}
+
+\item{...}{Further arguments to \code{\link[=fast_phy_denoise]{fast_phy_denoise()}}. \code{x}, \code{orientation},
+\code{svd_engine}, and \code{return_diagnostics} are set by the benchmark and may
+not be given.}
 }
 \value{
-Data frame of benchmark results.
+A data frame with one row per dataset and engine and columns
+\code{n_vox}, \code{n_time}, \code{rep}, \code{dataset_seed}, \code{svd_engine}, \code{status}
+(\code{"ok"} or \code{"error"}), \code{total_seconds}, \code{wnn_seconds},
+\code{pass_total_seconds}, \code{selected_components}, \code{physio_kept_nt} and
+\code{neural_kept_nt} (median over neuronal voxels of the fraction of
+physiological / neural source energy remaining after denoising), and
+\code{error_message}.
 }
 \description{
-Benchmark fast_phy_denoise across dimensions and SVD engines
+Times \code{\link[=fast_phy_denoise]{fast_phy_denoise()}} over a grid of data sizes and SVD engines, and
+scores each run against the ground truth of \code{\link[=simulate_phy_data]{simulate_phy_data()}}. Each
+simulated dataset is generated once and reused for every engine, so engines
+are compared on identical data.
+}
+\examples{
+res <- benchmark_fast_phy_denoise(
+  grid_n_vox = 300, grid_n_time = 100, engines = "svd", reps = 1
+)
+res[, c("svd_engine", "status", "selected_components", "neural_kept_nt")]
+}
+\seealso{
+\code{\link[=simulate_phy_data]{simulate_phy_data()}}, \code{\link[=fast_phy_denoise]{fast_phy_denoise()}}
 }
