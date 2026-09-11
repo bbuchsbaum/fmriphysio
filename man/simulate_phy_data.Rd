@@ -33,10 +33,10 @@ by a random factor near 1; use \code{0} for zero-mean data.}
 
 \item{physio_amp_nn, physio_amp_nt}{Typical absolute loading of the
 physiological sources in non-neuronal and neuronal voxels, in units of
-the noise standard deviation.}
+\code{noise_sd}, so source-to-noise ratios do not change with \code{noise_sd}.}
 
 \item{neural_amp_nt, neural_amp_nn}{Typical absolute loading of the neural
-sources in neuronal and non-neuronal voxels.}
+sources in neuronal and non-neuronal voxels, in units of \code{noise_sd}.}
 
 \item{n_neural}{Number of neural sources.}
 

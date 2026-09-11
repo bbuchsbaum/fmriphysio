@@ -29,9 +29,9 @@
 #'   by a random factor near 1; use `0` for zero-mean data.
 #' @param physio_amp_nn,physio_amp_nt Typical absolute loading of the
 #'   physiological sources in non-neuronal and neuronal voxels, in units of
-#'   the noise standard deviation.
+#'   `noise_sd`, so source-to-noise ratios do not change with `noise_sd`.
 #' @param neural_amp_nt,neural_amp_nn Typical absolute loading of the neural
-#'   sources in neuronal and non-neuronal voxels.
+#'   sources in neuronal and non-neuronal voxels, in units of `noise_sd`.
 #' @param n_neural Number of neural sources.
 #' @param noise_sd Median white-noise standard deviation.
 #' @param seed Optional integer seed. The caller's random-number stream is
@@ -130,9 +130,10 @@ simulate_phy_data <- function(
     neural <- matrix(neural, nrow = n_time, ncol = n_neural)
     colnames(neural) <- paste0("neural_", seq_len(n_neural))
 
-    # Loadings: random sign, magnitude around the requested amplitude.
+    # Loadings: random sign, magnitude around the requested amplitude, which
+    # is expressed in units of the noise standard deviation.
     loading <- function(n, amp, k) {
-      matrix(sample(c(-1, 1), n * k, replace = TRUE) * amp * stats::runif(n * k, 0.6, 1.4), n, k)
+      matrix(sample(c(-1, 1), n * k, replace = TRUE) * amp * noise_sd * stats::runif(n * k, 0.6, 1.4), n, k)
     }
     Wp <- matrix(0, n_vox, 2)
     Wn <- matrix(0, n_vox, n_neural)

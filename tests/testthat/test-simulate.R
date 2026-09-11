@@ -94,6 +94,16 @@ test_that("neural sources are low-pass", {
   }
 })
 
+test_that("source amplitudes are in units of noise_sd", {
+  a <- simulate_phy_data(300, 100, seed = 3)
+  b <- simulate_phy_data(300, 100, seed = 3, noise_sd = 2)
+  # Loadings ignored noise_sd, so doubling it halved every source-to-noise ratio.
+  expect_equal(b$physio_loadings, 2 * a$physio_loadings)
+  expect_equal(b$neural_loadings, 2 * a$neural_loadings)
+  expect_equal(b$noise_sd, 2 * a$noise_sd)
+  expect_equal(b$x - b$voxel_mean, 2 * (a$x - a$voxel_mean))
+})
+
 test_that("simulate_phy_data validates its arguments", {
   expect_error(simulate_phy_data(10, 50), "n_vox")
   expect_error(simulate_phy_data(50, 10), "n_time")

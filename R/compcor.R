@@ -264,27 +264,39 @@ compcor_denoise <- function(
   }
 
   # Nuisance matrix: detrended and variance-normalized (Behzadi et al., 2007).
+  # A series that is (numerically) all trend or low frequency -- judged
+  # against its own variance before filtering -- has nothing left to
+  # estimate from; scaling its roundoff residue to unit variance would
+  # manufacture spurious components.
+  Xsrc <- X[source, , drop = FALSE]
+  s_raw <- sqrt(rowSums((Xsrc - rowMeans(Xsrc))^2) / (T - 1))
   Xs <- detrend(prep(source))
   s <- sqrt(rowSums(Xs * Xs) / (T - 1))
-  usable <- s > 1e-8 * max(s)
+  usable <- s > 1e-8 * s_raw
   Xs <- Xs[usable, , drop = FALSE] / s[usable]
 
   dof <- T - 2L - (if (is.null(hp_basis)) 0L else ncol(hp_basis) - 1L)
   rank_req <- min(n_comp, nrow(Xs), max(dof, 1L))
-  sv <- truncated_svd(Xs, rank = rank_req, svd_engine = svd_engine, seed = seed)
-  d <- sv$d[seq_len(min(rank_req, length(sv$d)))]
-  keep_comp <- which(d > 1e-6 * max(d, 0))
-  n_comp_used <- length(keep_comp)
+  d <- numeric(0)
+  svd_engine_used <- NA_character_
+  Tcomp <- matrix(0, nrow = T, ncol = 0)
+  if (rank_req >= 1L) {
+    sv <- truncated_svd(Xs, rank = rank_req, svd_engine = svd_engine, seed = seed)
+    d <- sv$d[seq_len(min(rank_req, length(sv$d)))]
+    svd_engine_used <- sv$engine
+    keep_comp <- which(d > 1e-6 * max(d, 0))
+    if (length(keep_comp)) {
+      Tcomp <- sv$v[, keep_comp, drop = FALSE]
+      Tcomp <- matrix(apply(Tcomp, 2, safe_scale_vec), nrow = T, ncol = length(keep_comp))
+    }
+  }
+  n_comp_used <- ncol(Tcomp)
   if (n_comp_used < n_comp) {
     warning(sprintf(
       "Only %d of the requested %d CompCor components could be estimated from %d nuisance voxel(s); using %d.",
       n_comp_used, n_comp, sum(source), n_comp_used
     ), call. = FALSE)
   }
-
-  Tcomp <- sv$v[, keep_comp, drop = FALSE]
-  Tcomp <- apply(Tcomp, 2, safe_scale_vec)
-  Tcomp <- matrix(Tcomp, nrow = T, ncol = n_comp_used)
   n_before_design <- ncol(Tcomp)
   design_dropped <- integer(0)
   if (!is.null(design)) {
@@ -337,7 +349,7 @@ compcor_denoise <- function(
       n_excluded_nonfinite = vox$n_nonfinite,
       n_excluded_constant = vox$n_constant,
       singular_values = d,
-      svd_engine_used = sv$engine,
+      svd_engine_used = svd_engine_used,
       highpass = list(
         basis = hp_basis,
         n_regressors = if (is.null(hp_basis)) 0L else ncol(hp_basis)

@@ -310,3 +310,30 @@ test_that("compcor_denoise returns neuroim2 images in the same space", {
   expect_identical(neuroim2::space(fit$x_clean), sp)
   expect_equal(unname(methods::as(fit$x_clean, "matrix")), unname(ref$x_clean), tolerance = 1e-8)
 })
+
+test_that("nuisance voxels that are pure trend yield no regressors, not spurious ones", {
+  set.seed(1)
+  n_t <- 120
+  X <- matrix(rnorm(200 * n_t), 200, n_t) + 50
+  X[1:20, ] <- outer(rnorm(20, 5), rep(1, n_t)) + outer(rnorm(20), seq_len(n_t))
+  nm <- rep(c(TRUE, FALSE), c(20, 180))
+  # The roundoff left after detrending was scaled to unit variance and removed
+  # as 3 spurious components, changing other voxels by up to 1.7.
+  expect_warning(
+    fit <- compcor_denoise(X, tr = 2, nuisance_mask = nm, n_comp = 3),
+    "Only 0 of the requested 3"
+  )
+  expect_equal(ncol(fit$regressors), 0L)
+  expect_equal(fit$x_clean, X, tolerance = 1e-10)
+  expect_length(fit$diagnostics$singular_values, 0L)
+
+  # Likewise for nuisance series lying entirely in the DCT high-pass basis.
+  B <- dct_basis(n_t, 2, 1 / 128)
+  X2 <- X
+  X2[1:20, ] <- 50 + matrix(rnorm(20 * (ncol(B) - 1)), 20) %*% t(B[, -1, drop = FALSE]) * 3
+  expect_warning(
+    fit2 <- compcor_denoise(X2, tr = 2, nuisance_mask = nm, n_comp = 3, pre_highpass = "dct"),
+    "Only 0 of the requested 3"
+  )
+  expect_equal(ncol(fit2$regressors), 0L)
+})
