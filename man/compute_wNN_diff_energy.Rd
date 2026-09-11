@@ -2,7 +2,7 @@
 % Please edit documentation in R/wnn.R
 \name{compute_wNN_diff_energy}
 \alias{compute_wNN_diff_energy}
-\title{Compute fast wNN map using differenced energy}
+\title{Neuronal-tissue weights from temporal-difference energy}
 \usage{
 compute_wNN_diff_energy(
   X_nt,
@@ -12,17 +12,57 @@ compute_wNN_diff_energy(
 )
 }
 \arguments{
-\item{X_nt}{Numeric matrix (voxels x time).}
+\item{X_nt}{Numeric matrix, voxels (rows) by time points (columns). Rows
+should be finite; constant rows get zero energy.}
 
-\item{nt_q}{Quantile for neuronal cutoff (default 0.74).}
+\item{nt_q}{Quantile probability in (0, 1) of \code{delta} at and below which a
+voxel is fully neuronal (\code{wNN = 1}). Default 0.74.}
 
-\item{nn_q}{Quantile for non-neuronal cutoff (default 0.95).}
+\item{nn_q}{Quantile probability in (0, 1), greater than \code{nt_q}, of \code{delta}
+at and above which a voxel is fully non-neuronal (\code{wNN = 0}). Default
+0.95.}
 
-\item{threshold}{One of "percentile" or "mixture".}
+\item{threshold}{\code{"percentile"} (default) or \code{"mixture"}; see Details.}
 }
 \value{
-A list containing wNN, delta, energy, and threshold diagnostics.
+A list with elements
+\describe{
+\item{\code{wNN}}{Per-voxel weights in [0, 1]; 1 = neuronal.}
+\item{\code{delta}}{Per-voxel excess difference energy (>= 0).}
+\item{\code{energy}}{Per-voxel mean squared first difference.}
+\item{\code{posterior_nn}}{Per-voxel non-neuronal weight, \code{1 - wNN}.}
+\item{\code{delta_nt}, \code{delta_nn}}{The \code{delta} values at quantiles \code{nt_q}
+and \code{nn_q}.}
+\item{\code{threshold_method}}{The thresholding method used.}
+}
 }
 \description{
-Compute fast wNN map using differenced energy
+Builds the voxel weighting map used by \code{\link[=fast_phy_denoise]{fast_phy_denoise()}} without an FFT
+or tissue segmentation. Each voxel's energy is the mean squared first
+difference of its time series, a cheap high-pass power estimate. Energies
+are sorted and a line is fitted to the lower 80\% of ranks; a voxel's
+\emph{excess} energy (\code{delta}) is how far it lies above that line. Voxels with
+large excess high-frequency energy -- vasculature, cerebrospinal fluid, and
+tissue edges -- are treated as non-neuronal.
+}
+\details{
+The returned weight \code{wNN} is \strong{1 for likely neuronal voxels and 0 for
+likely non-neuronal voxels} (the polarity used by PHYCAA+). With
+\code{threshold = "percentile"} the weight ramps linearly from 1 at the
+\code{nt_q} quantile of \code{delta} to 0 at the \code{nn_q} quantile. With
+\code{threshold = "mixture"} a two-component Gaussian mixture is fitted to
+\code{log(delta)} (scale-free, so the result does not depend on data units) and
+\code{wNN} is one minus the posterior probability of the high-energy component;
+voxels with no excess energy get \code{wNN = 1}.
+}
+\examples{
+sim <- simulate_phy_data(n_vox = 300, n_time = 120, seed = 1)
+w <- compute_wNN_diff_energy(sim$x)
+# Non-neuronal voxels get lower weights:
+tapply(w$wNN, sim$nn, mean)
+}
+\references{
+Churchill, N. W., & Strother, S. C. (2013). PHYCAA+: An optimized, adaptive
+procedure for measuring and controlling physiological noise in BOLD fMRI.
+\emph{NeuroImage}, 82, 306--325. \doi{10.1016/j.neuroimage.2013.05.102}
 }

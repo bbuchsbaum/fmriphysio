@@ -1,4 +1,4 @@
 library(testthat)
-library(phynd)
+library(fmriphysio)
 
-test_check("phynd")
+test_check("fmriphysio")

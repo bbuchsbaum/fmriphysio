@@ -2,18 +2,55 @@
 % Please edit documentation in R/extractors.R
 \name{extract_caa_oneshot}
 \alias{extract_caa_oneshot}
-\title{One-shot CAA extraction in whitened PC subspace}
+\title{One-shot canonical autocorrelation analysis (CAA)}
 \usage{
 extract_caa_oneshot(Z_kt, n_candidates = 30L)
 }
 \arguments{
-\item{Z_kt}{Numeric matrix with shape K x T (whitened reduced scores).}
+\item{Z_kt}{Numeric matrix of reduced time series, components (rows) by
+time points (columns); typically the leading right singular vectors of
+the voxel data, transposed. Must have at least 4 time points.}
 
-\item{n_candidates}{Number of candidates to return.}
+\item{n_candidates}{Maximum number of components to return; at most
+\code{nrow(Z_kt)} are returned.}
 }
 \value{
-A list with \code{scores} (T x L) and \code{predictability} (length L).
+A list with elements
+\describe{
+\item{\code{scores}}{Time points x components matrix of component time
+courses, each centred and scaled to unit variance.}
+\item{\code{predictability}}{Canonical lag-1 correlations in [0, 1], in
+decreasing order; the magnitude of each component's lag-1
+predictability.}
+\item{\code{autocorrelation}}{Signed lag-1 autocorrelation of each returned
+time course.}
+\item{\code{method}}{The string \code{"caa"}.}
+}
 }
 \description{
-One-shot CAA extraction in whitened PC subspace
+Finds the linear combinations of a set of reduced time series that are
+maximally correlated with their own lag-1 values, by an exact lag-1
+canonical correlation analysis between \eqn{Z_{1:T-1}} and \eqn{Z_{2:T}}.
+This is the one-shot replacement for the repeated CAA search in PHYCAA+:
+one \eqn{K \times K} decomposition in a fixed low-rank space.
+}
+\details{
+Each component's time course is the left canonical projection applied to
+the full (centred) series, so components with negative lag-1
+autocorrelation (for example aliased cardiac noise near the Nyquist
+frequency) are recovered as well as positively autocorrelated ones.
+}
+\examples{
+set.seed(1)
+n <- 200
+ar <- as.numeric(stats::arima.sim(list(ar = 0.9), n))
+Z <- rbind(ar, matrix(rnorm(4 * n), 4, n))
+caa <- extract_caa_oneshot(Z, n_candidates = 3)
+round(caa$predictability, 2)
+abs(cor(caa$scores[, 1], ar))
+}
+\references{
+Churchill, N. W., & Strother, S. C. (2013). PHYCAA+: An optimized, adaptive
+procedure for measuring and controlling physiological noise in BOLD fMRI.
+\emph{NeuroImage}, 82, 306--325. \doi{10.1016/j.neuroimage.2013.05.102}
 }

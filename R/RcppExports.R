@@ -2,10 +2,6 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 score_components_nn_nt_cpp <- function(X_nt, T_tl, wNN, eps = 1e-12) {
-    .Call(`_phynd_score_components_nn_nt_cpp`, X_nt, T_tl, wNN, eps)
-}
-
-stability_filter_cpp <- function(T_tl, S1, S2, i1, i2, thresh = 0.30) {
-    .Call(`_phynd_stability_filter_cpp`, T_tl, S1, S2, i1, i2, thresh)
+    .Call(`_fmriphysio_score_components_nn_nt_cpp`, X_nt, T_tl, wNN, eps)
 }
 

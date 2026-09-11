@@ -7,3 +7,5 @@
 ^docs$
 ^\.rcmdcheck_result\.rds$
 ^.*\.Rcheck$
+^_pkgdown\.yml$
+^tests/testthat/_problems$

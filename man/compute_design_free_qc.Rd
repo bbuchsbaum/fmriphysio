@@ -2,22 +2,62 @@
 % Please edit documentation in R/benchmark_qc.R
 \name{compute_design_free_qc}
 \alias{compute_design_free_qc}
-\title{Compute design-free QC summary}
+\title{Compute design-free QC metrics}
 \usage{
-compute_design_free_qc(x_raw, x_clean, wNN, component_table = NULL)
+compute_design_free_qc(
+  x_raw,
+  x_clean,
+  wNN,
+  component_table = NULL,
+  orientation = c("auto", "voxels_by_time", "time_by_voxels")
+)
 }
 \arguments{
-\item{x_raw}{Raw data (matrix-like).}
+\item{x_raw}{Raw data, in any form accepted by \code{\link[=fast_phy_denoise]{fast_phy_denoise()}}.}
 
-\item{x_clean}{Denoised data (matrix-like).}
+\item{x_clean}{Denoised data with the same shape as \code{x_raw}.}
 
-\item{wNN}{Non-neuronal weighting vector.}
+\item{wNN}{Voxel weights (1 = neuronal, 0 = non-neuronal), one per voxel,
+e.g. \code{fit$wNN} from \code{\link[=fast_phy_denoise]{fast_phy_denoise()}}. Voxels with \code{NA} weight, or
+with non-finite data, are not scored.}
 
-\item{component_table}{Optional component summary table from fast_phy_denoise.}
+\item{component_table}{Optional component table from
+\code{\link[=fast_phy_denoise]{fast_phy_denoise()}}, summarised in \code{selected_components} and
+\code{ratio_summary}.}
+
+\item{orientation}{Orientation of \code{x_raw}: \code{"auto"}, \code{"voxels_by_time"},
+or \code{"time_by_voxels"}. \code{x_clean} is read in the same orientation.}
 }
 \value{
-Named list of QC metrics.
+A named list: \code{n_vox}, \code{n_time}, \code{n_nt}, \code{n_nn} (voxels scored in
+each class), \code{n_unscored}; \code{tsnr_nt_before}, \code{tsnr_nt_after},
+\code{tsnr_nt_delta}, \code{tsnr_nn_before}, \code{tsnr_nn_after} (median tSNR);
+\code{nt_variance_reduction_frac}, \code{nn_variance_before}, \code{nn_variance_after},
+\code{nn_variance_reduction_frac} (median variance and the fractional
+reduction of the median); \code{selected_components} (\code{NA} without a
+component table); and \code{ratio_summary}, a list with the \code{min}, \code{median},
+\code{mean} and \code{max} of the finite NN/NT ratios (\code{NA} when there are none), or
+\code{NULL} without a component table.
 }
 \description{
-Compute design-free QC summary
+Summarises how denoising changed the data without reference to any task
+design, separately for neuronal (wNN > 0.5) and non-neuronal (wNN < 0.5)
+voxels.
+}
+\details{
+Temporal SNR is \verb{|mean| / sd} per voxel. Because denoisers may alter
+voxel means, the "after" tSNR uses the \emph{raw} voxel mean over the cleaned
+standard deviation, so it measures noise reduction on a fixed signal level.
+Voxels whose standard deviation is zero (relative to their mean) have
+undefined tSNR and are skipped; a metric with no defined voxels is \code{NA}.
+}
+\examples{
+sim <- simulate_phy_data(n_vox = 300, n_time = 120, seed = 1)
+fit <- compcor_denoise(sim$x, tr = 2, nuisance_mask = sim$nn, n_comp = 2)
+qc <- compute_design_free_qc(sim$x, fit$x_clean, wNN = ifelse(sim$nn, 0, 1))
+qc$tsnr_nt_before
+qc$tsnr_nt_after
+}
+\seealso{
+\code{\link[=write_qc_artifact]{write_qc_artifact()}}
 }

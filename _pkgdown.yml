@@ -1,0 +1,41 @@
+template:
+  bootstrap: 5
+
+navbar:
+  structure:
+    left: [intro, reference, articles, news]
+    right: [search, github]
+
+reference:
+  - title: Denoising
+    desc: >
+      Remove physiological noise from fMRI time series.
+    contents:
+      - fast_phy_denoise
+      - compcor_denoise
+  - title: Tissue weights and components
+    desc: >
+      The building blocks of `fast_phy_denoise()`: neuronal-tissue weights
+      and lag-1 canonical autocorrelation components.
+    contents:
+      - compute_wNN_diff_energy
+      - extract_caa_oneshot
+  - title: Quality control and benchmarking
+    desc: >
+      Summarise what denoising changed, save the summary, and time the
+      pipeline against simulated ground truth.
+    contents:
+      - compute_design_free_qc
+      - write_qc_artifact
+      - benchmark_fast_phy_denoise
+  - title: Simulation
+    desc: >
+      Simulated BOLD data with known physiological and neural sources.
+    contents:
+      - simulate_phy_data
+
+articles:
+  - title: Getting started
+    navbar: ~
+    contents:
+      - fmriphysio
